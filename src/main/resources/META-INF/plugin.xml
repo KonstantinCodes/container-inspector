@@ -1,0 +1,50 @@
+<idea-plugin>
+    <id>codes.konstantin.containerinspector</id>
+    <name>Container Inspector for Symfony</name>
+    <vendor url="https://github.com/KonstantinCodes">KonstantinCodes</vendor>
+
+    <description><![CDATA[
+        <p>Visualize and explore your Symfony Dependency Injection Container with an interactive graph interface.</p>
+
+        <h3>Inspect your Symfony DI Container</h3>
+        <ul>
+            <li><strong>Interactive Graph Visualization</strong> - See your entire service architecture at a glance with an automatic hierarchical layout</li>
+            <li><strong>Smart Search & Navigation</strong> - Find services by ID or class name with instant highlighting and one-click navigation to PHP source code</li>
+            <li><strong>Dependency Analysis</strong> - Explore service dependencies and usages interactively by expanding nodes to reveal connections</li>
+            <li><strong>Multiple Configuration Profiles</strong> - Manage different container configurations</li>
+            <li><strong>Editor Synchronization</strong> - Optional link-with-editor mode to automatically select services as you navigate your codebase</li>
+            <li><strong>Performance Optimized</strong> - Handles large containers smoothly with intelligent filtering and minification options</li>
+        </ul>
+
+        <h3>How It Works</h3>
+        <p>Container Inspector parses your compiled Symfony container XML file (typically found in <code>var/cache/dev/</code>) and renders it as an interactive graph. Simply configure the path to your container XML, and start exploring your service architecture visually.</p>
+
+        <p>Perfect for understanding complex service relationships, debugging DI issues, and onboarding new team members to your Symfony application architecture.</p>
+
+        <h3>Symfony</h3>
+        <p>This plugin is not affiliated with, approved, sponsored or endorsed by the Symfony project.
+        Symfony is a trademark of Symfony SAS.</p>
+    ]]></description>
+
+    <depends>com.intellij.modules.platform</depends>
+    <depends>com.jetbrains.php</depends>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <!-- Tool Window -->
+        <toolWindow id="Container Inspector"
+                    anchor="bottom"
+                    secondary="false"
+                    icon="/icons/toolWindow.svg"
+                    factoryClass="codes.konstantin.containerinspector.ui.SymfonyContainerToolWindowFactory"/>
+
+        <!-- Settings -->
+        <projectConfigurable
+                parentId="tools"
+                instance="codes.konstantin.containerinspector.settings.SymfonyContainerConfigurable"
+                id="codes.konstantin.containerinspector.settings.SymfonyContainerConfigurable"
+                displayName="Container Inspector for Symfony"/>
+
+        <!-- Notification Group -->
+        <notificationGroup id="Container Inspector for Symfony" displayType="BALLOON"/>
+    </extensions>
+</idea-plugin>

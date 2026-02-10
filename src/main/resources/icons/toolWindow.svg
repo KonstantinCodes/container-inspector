@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" fill="none">
+    <g transform="matrix(0.205 0 0 0.205 -5.97 -5.97)" stroke="#6C707E" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="34" y="34" width="60" height="60" rx="14"
+              vector-effect="non-scaling-stroke"
+              stroke-width="1.35"
+              fill="none"/>
+
+        <path d="M50 52 L78 52 L64 80 Z"
+              vector-effect="non-scaling-stroke"
+              stroke-width="1.15"
+              fill="none"/>
+
+        <circle cx="50" cy="52" r="6.2" fill="#6C707E" stroke="none"/>
+        <circle cx="78" cy="52" r="6.2" fill="#6C707E" stroke="none"/>
+        <circle cx="64" cy="80" r="6.2" fill="#6C707E" stroke="none"/>
+
+        <path d="M90 92 L100 102"
+              vector-effect="non-scaling-stroke"
+              stroke-width="1.35"
+              opacity="0.9"/>
+    </g>
+</svg>
