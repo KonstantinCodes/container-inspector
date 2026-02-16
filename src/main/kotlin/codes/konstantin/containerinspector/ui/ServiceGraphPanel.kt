@@ -1369,20 +1369,42 @@ class ServiceGraphPanel(
                 val nodeScreenY = (matchingNode.y * zoomFactor).toInt()
                 val nodeScreenWidth = (matchingNode.width * zoomFactor).toInt()
                 val nodeScreenHeight = (matchingNode.height * zoomFactor).toInt()
-                
+
                 val nodeVisible = viewRect.intersects(
-                    nodeScreenX.toDouble(), 
-                    nodeScreenY.toDouble(), 
-                    nodeScreenWidth.toDouble(), 
+                    nodeScreenX.toDouble(),
+                    nodeScreenY.toDouble(),
+                    nodeScreenWidth.toDouble(),
                     nodeScreenHeight.toDouble()
                 )
-                
+
                 if (!nodeVisible) {
                     centerOnNode(matchingNode)
                 }
 
                 // Repaint to show selection
                 repaint()
+            } else if (focusMode) {
+                // Node not found in current focused graph - need to find it in the full graph and rebuild
+                currentGraph?.let { graph ->
+                    val service = graph.getAllServices().firstOrNull { it.className == className }
+                    if (service != null) {
+                        // Create minify checker to determine minified dependencies
+                        val config = settings.getActiveConfig()
+                        val minifyChecker = config?.let { MinifyChecker(it) }
+
+                        // Create a temporary node to select it and trigger graph rebuild
+                        selectedNode = Node(
+                            service = service,
+                            x = 0.0,
+                            y = 0.0,
+                            isVendorFn = { !isAppService(it) },
+                            minifiedDeps = graph.getDirectDependencies(service.id)
+                                .filter { minifyChecker?.shouldMinify(it) == true }
+                        )
+                        // Rebuild the graph with the new selection - this will create focused view around new service
+                        setGraph(graph)
+                    }
+                }
             }
         }
 
