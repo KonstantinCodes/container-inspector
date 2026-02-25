@@ -18,7 +18,7 @@ object NavigationHelper {
     fun navigateToClass(project: Project, className: String) {
         try {
             // Run the index access in a read action on background thread
-            val navigatable: Navigatable? = ReadAction.compute<Navigatable?, Exception> {
+            val navigatable: Navigatable? = ReadAction.computeCancellable<Navigatable?, Exception> {
                 val phpIndex = PhpIndex.getInstance(project)
                 val classes = phpIndex.getClassesByFQN(className)
                 if (classes.isNotEmpty()) classes.first() as? Navigatable else null

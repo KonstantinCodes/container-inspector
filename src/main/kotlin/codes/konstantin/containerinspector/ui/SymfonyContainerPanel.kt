@@ -367,27 +367,34 @@ class SymfonyContainerPanel(private val project: Project) : JPanel(BorderLayout(
     }
 
     private fun handleEditorFileSelection(file: VirtualFile) {
-        // Only process if link with editor is active
-        if (!graphPanel.isLinkWithEditorActive()) return
-
         try {
-            // Get the PSI file
-            val psiFile = PsiManager.getInstance(project).findFile(file) ?: return
-            
-            // Find all PhpClass elements in the file
-            val phpClasses = PsiTreeUtil.findChildrenOfType(psiFile, PhpClass::class.java)
-            
-            if (phpClasses.isEmpty()) return
-            
-            // Use the first class in the file and get its FQN
-            val phpClass = phpClasses.first()
-            val fqn = phpClass.fqn.toString()
-            
-            // Remove leading backslash if present (Symfony uses FQN without leading backslash)
-            val className = if (fqn.startsWith("\\")) fqn.substring(1) else fqn
-            
-            // Select the service in the graph panel
-            graphPanel.selectServiceByClassName(className)
+            // Access PSI requires read action
+            val className = com.intellij.openapi.application.ApplicationManager.getApplication().runReadAction<String?> {
+                try {
+                    // Get the PSI file
+                    val psiFile = PsiManager.getInstance(project).findFile(file) ?: return@runReadAction null
+
+                    // Find all PhpClass elements in the file
+                    val phpClasses = PsiTreeUtil.findChildrenOfType(psiFile, PhpClass::class.java)
+
+                    if (phpClasses.isEmpty()) return@runReadAction null
+
+                    // Use the first class in the file and get its FQN
+                    val phpClass = phpClasses.first()
+                    val fqn = phpClass.fqn.toString()
+
+                    // Remove leading backslash if present (Symfony uses FQN without leading backslash)
+                    if (fqn.startsWith("\\")) fqn.substring(1) else fqn
+                } catch (e: Exception) {
+                    null
+                }
+            }
+
+            // Update active editor and optionally select the service in the graph panel
+            // (selectServiceByClassName handles both isActiveInEditor and selection based on linkWithEditor)
+            if (className != null) {
+                graphPanel.selectServiceByClassName(className)
+            }
         } catch (e: Exception) {
             // Silently fail - not all files contain PHP classes
         }
@@ -442,6 +449,27 @@ class SymfonyContainerPanel(private val project: Project) : JPanel(BorderLayout(
         graphPanel.showGraph(graph)
         // Don't call performSearch() - we're only showing the graph panel now, not the service list
         showContent()
+
+        // Select the service that's currently active in the editor (if any)
+        selectCurrentlyActiveEditorService()
+    }
+
+    private fun selectCurrentlyActiveEditorService() {
+        // Wait for indexes to be ready before trying to access PSI
+        com.intellij.openapi.project.DumbService.getInstance(project).runWhenSmart {
+            javax.swing.SwingUtilities.invokeLater {
+                try {
+                    // Get the currently selected file in the editor
+                    val fileEditorManager = com.intellij.openapi.fileEditor.FileEditorManager.getInstance(project)
+                    val currentFile = fileEditorManager.selectedFiles.firstOrNull() ?: return@invokeLater
+
+                    // Handle the file selection (this will update isActiveInEditor and optionally select)
+                    handleEditorFileSelection(currentFile)
+                } catch (e: Exception) {
+                    // Silently fail - not critical
+                }
+            }
+        }
     }
 
     override fun onContainerLoadFailed(exception: Exception) {

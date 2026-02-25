@@ -123,7 +123,7 @@ class ServiceGraphPanel(
     private val fullTraceAction = object : ToggleAction(
         "Toggle Full Trace",
         "Show full connection trace between nodes",
-        AllIcons.Actions.ShowAsTree
+        AllIcons.Hierarchy.Class
     ) {
         override fun isSelected(e: AnActionEvent): Boolean = fullTrace
 
@@ -165,7 +165,7 @@ class ServiceGraphPanel(
     private val linkWithEditorAction = object : ToggleAction(
         "Link with Editor",
         "Synchronize service selection with editor",
-        AllIcons.General.Pin
+        AllIcons.Actions.Attach
     ) {
         override fun isSelected(e: AnActionEvent): Boolean = linkWithEditor
 
@@ -176,6 +176,8 @@ class ServiceGraphPanel(
             // When activating link mode, if a service is selected, open it in the editor
             if (state) {
                 graphCanvas.getSelectedService()?.className?.let { className ->
+                    // Update isActiveInEditor immediately
+                    graphCanvas.updateActiveInEditor(className)
                     onNavigateToEditor?.invoke()
                     // Run navigation on background thread to avoid EDT violations
                     ApplicationManager.getApplication().executeOnPooledThread {
@@ -188,6 +190,26 @@ class ServiceGraphPanel(
     private val linkWithEditorButton = ActionButton(
         linkWithEditorAction,
         linkWithEditorAction.templatePresentation.clone(),
+        ActionPlaces.TOOLBAR,
+        ActionToolbar.DEFAULT_MINIMUM_BUTTON_SIZE
+    )
+
+    private var pinSelectedService = false  // Always start deactivated, don't persist
+    private val pinSelectedServiceAction = object : ToggleAction(
+        "Pin Selected Service",
+        "Pin service selection - prevents selection changes when navigating",
+        AllIcons.General.Pin
+    ) {
+        override fun isSelected(e: AnActionEvent): Boolean = pinSelectedService
+
+        override fun setSelected(e: AnActionEvent, state: Boolean) {
+            pinSelectedService = state
+            // Don't persist - always reset to false on restart
+        }
+    }
+    private val pinSelectedServiceButton = ActionButton(
+        pinSelectedServiceAction,
+        pinSelectedServiceAction.templatePresentation.clone(),
         ActionPlaces.TOOLBAR,
         ActionToolbar.DEFAULT_MINIMUM_BUTTON_SIZE
     )
@@ -220,6 +242,7 @@ class ServiceGraphPanel(
                 leftPanel.add(fullTraceButton)
                 leftPanel.add(focusModeButton)
                 leftPanel.add(linkWithEditorButton)
+                leftPanel.add(pinSelectedServiceButton)
 
                 // Vertical separator
                 leftPanel.add(createVerticalSeparator())
@@ -278,6 +301,10 @@ class ServiceGraphPanel(
                 rightPanel.add(zoomOutButton)
                 rightPanel.add(zoomResetButton)
                 rightPanel.add(zoomInButton)
+
+                // Vertical separator before close button
+                rightPanel.add(createVerticalSeparator())
+
                 rightPanel.add(closeButton)
 
                 add(rightPanel, BorderLayout.EAST)
@@ -556,9 +583,13 @@ class ServiceGraphPanel(
      * This is used when link with editor is active and a file is opened in the editor.
      */
     fun selectServiceByClassName(className: String) {
+        // Always update isActiveInEditor state, regardless of linkWithEditor setting
+        graphCanvas.updateActiveInEditor(className)
+
+        // Only change selection if linkWithEditor is active
         if (!linkWithEditor) return
 
-        graphCanvas.selectNodeByClassName(className)
+        graphCanvas.selectNodeByClassName(className, selectNode = !pinSelectedService)
     }
 
     /**
@@ -688,61 +719,80 @@ class ServiceGraphPanel(
 
                 override fun mouseReleased(e: MouseEvent) {
                     if (!SwingUtilities.isLeftMouseButton(e)) return
-                    
+
                     val scaledPoint = Point((e.x / zoomFactor).toInt(), (e.y / zoomFactor).toInt())
                     val releasedNode = nodes.find { it.contains(scaledPoint) }
-                    
+
                     // Only process if released on same node as pressed (no drag)
                     if (pressedNode == releasedNode && pressedNode != null) {
-                        val clickedNode = pressedNode
-                        
-                        // Single click - select/deselect node instantly
-                        val previousSelection = selectedNode
-                        selectedNode = if (selectedNode == clickedNode) null else clickedNode
+                        val clickedNode = pressedNode!!
 
-                        // Update selection state on all nodes
-                        nodes.forEach { node ->
-                            node.isSelected = node == selectedNode
-                        }
-
-                        // If link with editor is active, open the class in editor
-                        if (linkWithEditor && selectedNode != null) {
-                            selectedNode!!.service.className?.let { className ->
-                                // Notify that we're navigating to editor (to prevent feedback loop)
-                                onNavigateToEditor?.invoke()
-                                // Run navigation on background thread to avoid EDT violations
-                                ApplicationManager.getApplication().executeOnPooledThread {
-                                    NavigationHelper.navigateToClass(project, className)
+                        // If pin is active, open in editor but don't change selection
+                        if (pinSelectedService) {
+                            if (linkWithEditor) {
+                                clickedNode.service.className?.let { className ->
+                                    // Update isActiveInEditor immediately
+                                    updateActiveInEditor(className)
+                                    // Notify that we're navigating to editor (to prevent feedback loop)
+                                    onNavigateToEditor?.invoke()
+                                    // Run navigation on background thread to avoid EDT violations
+                                    ApplicationManager.getApplication().executeOnPooledThread {
+                                        NavigationHelper.navigateToClass(project, className)
+                                    }
                                 }
                             }
-                        }
-
-                        // Notify listener about selection change
-                        if (selectedNode != null && currentGraph != null) {
-                            val dependencies = currentGraph!!.getDirectDependencies(selectedNode!!.service.id).size
-                            val dependents = currentGraph!!.getDirectDependents(selectedNode!!.service.id).size
-                            onSelectionChanged?.invoke(selectedNode!!.service, dependents, dependencies)
                         } else {
-                            onSelectionChanged?.invoke(null, 0, 0)
-                        }
+                            // Pin not active - normal selection behavior
+                            // Single click - select/deselect node instantly
+                            val previousSelection = selectedNode
+                            selectedNode = if (selectedNode == clickedNode) null else clickedNode
 
-                        // Handle focus mode
-                        if (selectedNode == null) {
-                            // Deselected - turn off focus mode and reset checkbox
-                            if (focusMode) {
-                                focusMode = false
+                            // Update selection state on all nodes
+                            nodes.forEach { node ->
+                                node.isSelected = node == selectedNode
+                            }
+
+                            // If link with editor is active, open the class in editor
+                            if (linkWithEditor && selectedNode != null) {
+                                selectedNode!!.service.className?.let { className ->
+                                    // Update isActiveInEditor immediately
+                                    updateActiveInEditor(className)
+                                    // Notify that we're navigating to editor (to prevent feedback loop)
+                                    onNavigateToEditor?.invoke()
+                                    // Run navigation on background thread to avoid EDT violations
+                                    ApplicationManager.getApplication().executeOnPooledThread {
+                                        NavigationHelper.navigateToClass(project, className)
+                                    }
+                                }
+                            }
+
+                            // Notify listener about selection change
+                            if (selectedNode != null && currentGraph != null) {
+                                val dependencies = currentGraph!!.getDirectDependencies(selectedNode!!.service.id).size
+                                val dependents = currentGraph!!.getDirectDependents(selectedNode!!.service.id).size
+                                onSelectionChanged?.invoke(selectedNode!!.service, dependents, dependencies)
+                            } else {
+                                onSelectionChanged?.invoke(null, 0, 0)
+                            }
+
+                            // Handle focus mode
+                            if (selectedNode == null) {
+                                // Deselected - turn off focus mode and reset checkbox
+                                if (focusMode) {
+                                    focusMode = false
+                                    currentGraph?.let { setGraph(it) }
+                                } else {
+                                    repaint()
+                                }
+                            } else if (focusMode && previousSelection != selectedNode) {
+                                // Different service selected in focus mode - re-layout
                                 currentGraph?.let { setGraph(it) }
                             } else {
                                 repaint()
                             }
-                        } else if (focusMode && previousSelection != selectedNode) {
-                            // Different service selected in focus mode - re-layout
-                            currentGraph?.let { setGraph(it) }
-                        } else {
-                            repaint()
                         }
                     }
-                    
+
                     pressedPoint = null
                     pressedNode = null
                 }
@@ -750,27 +800,33 @@ class ServiceGraphPanel(
                 override fun mouseClicked(e: MouseEvent) {
                     if (!SwingUtilities.isLeftMouseButton(e)) return
                     if (e.clickCount != 2) return
-                    
+
                     val scaledPoint = Point((e.x / zoomFactor).toInt(), (e.y / zoomFactor).toInt())
                     val clickedNode = nodes.find { it.contains(scaledPoint) }
-                    
-                    // Double-click: open in editor and re-select to keep it selected
+
+                    // Double-click: open in editor (but don't change selection if pinned)
                     clickedNode?.let { node ->
                         val className = node.service.className ?: return
-                        
+
+                        // Update isActiveInEditor immediately
+                        updateActiveInEditor(className)
+                        // Notify that we're navigating to editor (to prevent feedback loop)
+                        onNavigateToEditor?.invoke()
                         // Run navigation on background thread to avoid EDT violations
                         ApplicationManager.getApplication().executeOnPooledThread {
                             NavigationHelper.navigateToClass(project, className)
                         }
 
-                        // Re-select the node to ensure it stays selected
-                        selectedNode = node
-                        nodes.forEach { it.isSelected = it == selectedNode }
+                        // If pin is not active, update selection
+                        if (!pinSelectedService) {
+                            selectedNode = node
+                            nodes.forEach { it.isSelected = it == selectedNode }
 
-                        if (currentGraph != null) {
-                            val dependencies = currentGraph!!.getDirectDependencies(node.service.id).size
-                            val dependents = currentGraph!!.getDirectDependents(node.service.id).size
-                            onSelectionChanged?.invoke(node.service, dependents, dependencies)
+                            if (currentGraph != null) {
+                                val dependencies = currentGraph!!.getDirectDependencies(node.service.id).size
+                                val dependents = currentGraph!!.getDirectDependents(node.service.id).size
+                                onSelectionChanged?.invoke(node.service, dependents, dependencies)
+                            }
                         }
                         repaint()
                     }
@@ -1019,37 +1075,28 @@ class ServiceGraphPanel(
                     if (focusMode && selectedNode != null) {
                         val focusedServiceIds = mutableSetOf(selectedNode!!.service.id)
 
-                        if (fullTrace) {
-                            // Get all recursive dependencies
-                            val toProcessDeps = mutableListOf(selectedNode!!.service.id)
-                            while (toProcessDeps.isNotEmpty()) {
-                                val serviceId = toProcessDeps.removeAt(0)
-                                graph.getDirectDependencies(serviceId).forEach { dep ->
-                                    if (dep.id !in focusedServiceIds) {
-                                        focusedServiceIds.add(dep.id)
-                                        toProcessDeps.add(dep.id)
-                                    }
+                        // Always get full trace (all recursive dependencies and dependents)
+                        // Get all recursive dependencies
+                        val toProcessDeps = mutableListOf(selectedNode!!.service.id)
+                        while (toProcessDeps.isNotEmpty()) {
+                            val serviceId = toProcessDeps.removeAt(0)
+                            graph.getDirectDependencies(serviceId).forEach { dep ->
+                                if (dep.id !in focusedServiceIds) {
+                                    focusedServiceIds.add(dep.id)
+                                    toProcessDeps.add(dep.id)
                                 }
                             }
+                        }
 
-                            // Get all recursive dependents
-                            val toProcessDependents = mutableListOf(selectedNode!!.service.id)
-                            while (toProcessDependents.isNotEmpty()) {
-                                val serviceId = toProcessDependents.removeAt(0)
-                                graph.getDirectDependents(serviceId).forEach { dep ->
-                                    if (dep.id !in focusedServiceIds) {
-                                        focusedServiceIds.add(dep.id)
-                                        toProcessDependents.add(dep.id)
-                                    }
+                        // Get all recursive dependents
+                        val toProcessDependents = mutableListOf(selectedNode!!.service.id)
+                        while (toProcessDependents.isNotEmpty()) {
+                            val serviceId = toProcessDependents.removeAt(0)
+                            graph.getDirectDependents(serviceId).forEach { dep ->
+                                if (dep.id !in focusedServiceIds) {
+                                    focusedServiceIds.add(dep.id)
+                                    toProcessDependents.add(dep.id)
                                 }
-                            }
-                        } else {
-                            // Only direct connections
-                            graph.getDirectDependencies(selectedNode!!.service.id).forEach { dep ->
-                                focusedServiceIds.add(dep.id)
-                            }
-                            graph.getDirectDependents(selectedNode!!.service.id).forEach { dep ->
-                                focusedServiceIds.add(dep.id)
                             }
                         }
 
@@ -1334,8 +1381,8 @@ class ServiceGraphPanel(
             highlightedNodes = results.toSet()
             currentResultNode = currentResult
             nodes.forEach { node ->
-                node.isHighlighted = node in highlightedNodes
-                node.isCurrentResult = node == currentResultNode
+                node.isSearchResult = node in highlightedNodes
+                node.isCurrentSearchResult = node == currentResultNode
             }
             repaint()
         }
@@ -1344,22 +1391,30 @@ class ServiceGraphPanel(
             return selectedNode?.service
         }
 
-        fun selectNodeByClassName(className: String) {
+        fun updateActiveInEditor(className: String) {
+            // Update isActiveInEditor for all nodes
+            nodes.forEach { it.isActiveInEditor = it.service.className == className }
+            repaint()
+        }
+
+        fun selectNodeByClassName(className: String, selectNode: Boolean = true) {
             val matchingNode = nodes.firstOrNull { node ->
                 node.service.className == className
             }
 
             if (matchingNode != null) {
-                // Update selection
-                val previousSelection = selectedNode
-                selectedNode = matchingNode
-                nodes.forEach { it.isSelected = it == selectedNode }
+                if (selectNode) {
+                    // Update selection
+                    val previousSelection = selectedNode
+                    selectedNode = matchingNode
+                    nodes.forEach { it.isSelected = it == selectedNode }
 
-                // Notify listener about selection change
-                currentGraph?.let { graph ->
-                    val dependencies = graph.getDirectDependencies(matchingNode.service.id).size
-                    val dependents = graph.getDirectDependents(matchingNode.service.id).size
-                    onSelectionChanged?.invoke(matchingNode.service, dependents, dependencies)
+                    // Notify listener about selection change
+                    currentGraph?.let { graph ->
+                        val dependencies = graph.getDirectDependencies(matchingNode.service.id).size
+                        val dependents = graph.getDirectDependents(matchingNode.service.id).size
+                        onSelectionChanged?.invoke(matchingNode.service, dependents, dependencies)
+                    }
                 }
 
                 // Only center if the node is not currently visible in viewport
@@ -1381,9 +1436,9 @@ class ServiceGraphPanel(
                     centerOnNode(matchingNode)
                 }
 
-                // Repaint to show selection
+                // Repaint to show selection or just the re-centering
                 repaint()
-            } else if (focusMode) {
+            } else if (focusMode && selectNode) {
                 // Node not found in current focused graph - need to find it in the full graph and rebuild
                 currentGraph?.let { graph ->
                     val service = graph.getAllServices().firstOrNull { it.className == className }
@@ -1509,11 +1564,11 @@ class ServiceGraphPanel(
             val normalEdges = mutableListOf<Edge>()
             val highlightedEdges = mutableListOf<Edge>()
 
-            // Calculate full trace if enabled
+            // Calculate upstream and downstream nodes if a node is selected
             val upstreamNodes = mutableSetOf<Node>()
             val downstreamNodes = mutableSetOf<Node>()
 
-            if (selectedNode != null && fullTrace && currentGraph != null) {
+            if (selectedNode != null && currentGraph != null) {
                 // Get all upstream dependencies (recursive)
                 val allUpstreamIds = mutableSetOf<String>()
                 val toProcess = mutableListOf(selectedNode!!.service.id)
@@ -1601,9 +1656,9 @@ class ServiceGraphPanel(
                                          (edge.from in downstreamNodes && edge.to in downstreamNodes)
 
                 g2.color = when {
-                    isInDependencyChain || isDirectDependency -> JBColor.RED    // Dependencies (what selected depends on)
-                    isInDependentChain || isDirectDependent -> JBColor.BLUE     // Dependents (what depends on selected)
-                    else -> JBColor.RED
+                    isInDependencyChain || isDirectDependency -> JBColor(Color(0xdb, 0x3b, 0x4b), Color(0xdb, 0x3b, 0x4b))    // #db3b4b Dependencies (what selected depends on)
+                    isInDependentChain || isDirectDependent -> JBColor(Color(0x00, 0x33, 0xb3), Color(0x00, 0x33, 0xb3))     // #0033b3 Dependents (what depends on selected)
+                    else -> JBColor(Color(0xdb, 0x3b, 0x4b), Color(0xdb, 0x3b, 0x4b))
                 }
                 g2.stroke = BasicStroke(3.0f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND)
 
@@ -1623,7 +1678,7 @@ class ServiceGraphPanel(
 
             // Draw nodes (on top of everything)
             nodes.forEach { node ->
-                node.draw(g2)
+                node.draw(g2, pinSelectedService)
             }
 
             // Draw tooltip as part of the canvas (on top of everything else)
@@ -1708,9 +1763,10 @@ class ServiceGraphPanel(
         val isVendorFn: (ServiceDefinition) -> Boolean,
         val minifiedDeps: List<ServiceDefinition> = emptyList(),
         var isHovered: Boolean = false,
-        var isHighlighted: Boolean = false,
-        var isCurrentResult: Boolean = false,
+        var isSearchResult: Boolean = false,
+        var isCurrentSearchResult: Boolean = false,
         var isSelected: Boolean = false,
+        var isActiveInEditor: Boolean = false,
         var isTagIconHovered: Boolean = false
     ) {
         companion object {
@@ -1843,34 +1899,54 @@ class ServiceGraphPanel(
                     point.y >= bounds.y && point.y <= bounds.y + bounds.height
         }
 
-        fun draw(g2: Graphics2D) {
+        fun draw(g2: Graphics2D, pinSelectedService: Boolean) {
             // Background with solid color
             val isVendor = isVendorFn(service)
             g2.color = when {
                 isSelected -> JBColor(Color(255, 255, 200), Color(120, 120, 60))  // Yellow for selection
-                isHovered -> JBColor(Color(200, 230, 255), Color(100, 150, 200))
+                isCurrentSearchResult -> JBColor(Color(220, 255, 220), Color(80, 120, 80))  // Light green for current search result
+                isActiveInEditor -> JBColor(Color(0xe1, 0xea, 0xff), Color(0x25, 0x32, 0x4d))  // #e1eaff light, #25324d dark for active in editor
+                isHovered -> JBColor(Color(0xe1, 0xea, 0xff), Color(0x25, 0x32, 0x4d))  // #e1eaff light, #25324d dark for hover
                 isVendor -> JBColor(Color(240, 240, 240), Color(80, 80, 80))
                 else -> JBColor.WHITE
             }
-            g2.fill(Rectangle2D.Double(x, y, width, height))
+
+            // Draw shape (rounded for isActiveInEditor, rectangular otherwise)
+            if (isActiveInEditor) {
+                val cornerRadius = 8.0
+                val roundRect = java.awt.geom.RoundRectangle2D.Double(x, y, width, height, cornerRadius, cornerRadius)
+                g2.fill(roundRect)
+            } else {
+                g2.fill(Rectangle2D.Double(x, y, width, height))
+            }
 
             // Border
             g2.color = when {
                 isSelected -> JBColor(Color(200, 150, 0), Color(200, 200, 100))  // Dark yellow/gold for selected
-                isCurrentResult -> JBColor.RED
-                isHighlighted -> JBColor.ORANGE
-                service.isPublic -> JBColor.BLUE
+                isCurrentSearchResult -> JBColor(Color(0, 180, 0), Color(100, 220, 100))  // Green for current search result
+                isSearchResult -> JBColor(Color(0, 150, 0), Color(80, 200, 80))  // Green for search results
+                isActiveInEditor -> JBColor(Color(0x35, 0x74, 0xf0), Color(100, 140, 200))  // #3574f0 border for active in editor
+                service.isPublic -> JBColor(Color(255, 105, 180), Color(255, 182, 193))  // Pink for public services
                 else -> JBColor.GRAY
             }
             g2.stroke = BasicStroke(
                 when {
+                    isActiveInEditor -> 4.0f
                     isSelected -> 4.0f
-                    isCurrentResult -> 3.0f
-                    isHighlighted || service.isPublic -> 2.0f
+                    isCurrentSearchResult -> 3.0f
+                    isSearchResult || service.isPublic -> 2.0f
                     else -> 1.0f
                 }
             )
-            g2.draw(Rectangle2D.Double(x, y, width, height))
+
+            // Draw border (rounded for isActiveInEditor, rectangular otherwise)
+            if (isActiveInEditor) {
+                val cornerRadius = 8.0
+                val roundRect = java.awt.geom.RoundRectangle2D.Double(x, y, width, height, cornerRadius, cornerRadius)
+                g2.draw(roundRect)
+            } else {
+                g2.draw(Rectangle2D.Double(x, y, width, height))
+            }
 
             var currentY = y + PADDING
 
@@ -1882,7 +1958,10 @@ class ServiceGraphPanel(
                 val fullClassName = service.className ?: service.id
 
                 // Draw FQCN (small font, gray)
-                g2.color = JBColor.GRAY
+                g2.color = when {
+                    isSelected -> JBColor(Color.GRAY, Color(220, 220, 220))  // Gray in light mode, light gray in dark mode
+                    else -> JBColor(Color.GRAY, Color(220, 220, 220))  // Light gray in dark mode
+                }
                 g2.font = Font("Dialog", Font.PLAIN, 9)
                 val fqcnFm = g2.fontMetrics
                 val maxFqcnWidth = (width - PADDING * 2).toInt()
@@ -1892,7 +1971,10 @@ class ServiceGraphPanel(
                 currentY += fqcnFm.height + 3
 
                 // Draw @serviceId (large font, bold)
-                g2.color = JBColor.foreground()
+                g2.color = when {
+                    isSelected -> JBColor(Color.BLACK, Color.WHITE)  // Black in light mode, white in dark mode
+                    else -> JBColor(Color.BLACK, Color.WHITE)  // White in dark mode
+                }
                 g2.font = Font("Dialog", Font.BOLD, 13)
                 val serviceIdFm = g2.fontMetrics
                 val serviceIdText = "@${service.id}"
@@ -1916,7 +1998,10 @@ class ServiceGraphPanel(
 
                 // Draw namespace (small font)
                 if (namespace.isNotEmpty()) {
-                    g2.color = JBColor.GRAY
+                    g2.color = when {
+                        isSelected -> JBColor(Color.GRAY, Color(220, 220, 220))  // Gray in light mode, light gray in dark mode
+                        else -> JBColor(Color.GRAY, Color(220, 220, 220))  // Light gray in dark mode
+                    }
                     g2.font = Font("Dialog", Font.PLAIN, 9)
                     val namespaceFm = g2.fontMetrics
 
@@ -1929,7 +2014,10 @@ class ServiceGraphPanel(
                 }
 
                 // Draw class name (larger font)
-                g2.color = JBColor.foreground()
+                g2.color = when {
+                    isSelected -> JBColor(Color.BLACK, Color.WHITE)  // Black in light mode, white in dark mode
+                    else -> JBColor(Color.BLACK, Color.WHITE)  // White in dark mode
+                }
                 g2.font = Font("Dialog", Font.BOLD, 13)
                 val classNameFm = g2.fontMetrics
 
@@ -1950,7 +2038,10 @@ class ServiceGraphPanel(
             // Draw minified dependencies with @ symbol and underlined service IDs
             if (minifiedDeps.isNotEmpty()) {
                 currentY += 5
-                g2.color = JBColor.GRAY
+                g2.color = when {
+                    isSelected -> JBColor(Color.GRAY, Color(220, 220, 220))  // Gray in light mode, light gray in dark mode
+                    else -> JBColor(Color.GRAY, Color(220, 220, 220))  // Light gray in dark mode
+                }
                 g2.font = Font("Dialog", Font.PLAIN, 9)
                 g2.stroke = BasicStroke(1.0f)  // Reset stroke to thin line
                 val minifiedFm = g2.fontMetrics
@@ -1997,7 +2088,10 @@ class ServiceGraphPanel(
             if (service.isDeprecated) flags.add("DEPRECATED")
 
             if (flags.isNotEmpty()) {
-                g2.color = JBColor.GRAY
+                g2.color = when {
+                    isSelected -> JBColor(Color.GRAY, Color(220, 220, 220))  // Gray in light mode, light gray in dark mode
+                    else -> JBColor(Color.GRAY, Color(220, 220, 220))  // Light gray in dark mode
+                }
                 val flagsText = flags.joinToString(" ")
                 val truncatedFlags = truncateText(flagsText, flagFm, (width - PADDING * 2).toInt())
                 g2.drawString(truncatedFlags, (x + PADDING).toFloat(), (currentY + flagFm.ascent).toFloat())
@@ -2030,32 +2124,22 @@ class ServiceGraphPanel(
                 )
             }
 
+            // Draw pin icon in top left corner if service is pinned (selected with pin mode active)
+            if (isSelected && pinSelectedService) {
+                val iconSize = 16.0
+                val iconX = (x + iconSize / 2).toInt()
+                val iconY = (y - iconSize / 2).toInt()
+
+                AllIcons.General.PinHovered.paintIcon(null, g2, iconX, iconY)
+            }
+
             // Draw tag icon in top right corner if service has tags
             if (service.tags.isNotEmpty()) {
                 val iconBounds = getTagIconBounds()!!
-                val iconX = iconBounds.x
-                val iconY = iconBounds.y
-                val iconSize = iconBounds.width
+                val iconX = iconBounds.x.toInt()
+                val iconY = iconBounds.y.toInt()
 
-                // Draw a simple tag icon (a rectangle with a corner cut)
-                g2.color = JBColor(Color(100, 150, 255), Color(150, 180, 220))
-                val tagPath = java.awt.Polygon()
-                tagPath.addPoint(iconX.toInt(), iconY.toInt())
-                tagPath.addPoint((iconX + iconSize * 0.7).toInt(), iconY.toInt())
-                tagPath.addPoint((iconX + iconSize).toInt(), (iconY + iconSize * 0.3).toInt())
-                tagPath.addPoint((iconX + iconSize).toInt(), (iconY + iconSize).toInt())
-                tagPath.addPoint(iconX.toInt(), (iconY + iconSize).toInt())
-                g2.fill(tagPath)
-
-                // Draw small circle (tag hole) - use background color
-                val holeSize = 3
-                g2.color = when {
-                    isSelected -> JBColor(Color(255, 255, 200), Color(120, 120, 60))
-                    isHovered -> JBColor(Color(200, 230, 255), Color(100, 150, 200))
-                    isVendor -> JBColor(Color(240, 240, 240), Color(80, 80, 80))
-                    else -> JBColor.WHITE
-                }
-                g2.fillOval((iconX + 3).toInt(), (iconY + 3).toInt(), holeSize, holeSize)
+                AllIcons.Nodes.TextArea.paintIcon(null, g2, iconX, iconY)
             }
         }
 
@@ -2129,11 +2213,11 @@ class ServiceGraphPanel(
     ) {
         fun draw(g2: Graphics2D) {
             // Draw filled background
-            g2.color = JBColor(Color(230, 240, 255, 100), Color(60, 80, 120, 100))
+            g2.color = JBColor(Color(0xf5, 0xf8, 0xfe, 100), Color(0x1f, 0x20, 0x24, 100))  // #f5f8fe with transparency
             g2.fill(Rectangle2D.Double(x, y, width, height))
 
             // Draw border
-            g2.color = JBColor(Color(100, 150, 255), Color(150, 180, 220))
+            g2.color = JBColor(Color(0x35, 0x74, 0xf0), Color(150, 180, 220))  // #3574f0 border
             g2.stroke = BasicStroke(2.0f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND,
                 10.0f, floatArrayOf(10.0f, 5.0f), 0.0f)
             g2.draw(Rectangle2D.Double(x, y, width, height))

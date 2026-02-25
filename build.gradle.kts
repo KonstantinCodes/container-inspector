@@ -4,7 +4,7 @@ plugins {
 }
 
 group = "codes.konstantin"
-version = "1.0.0"
+version = "1.1.0"
 
 repositories {
     mavenCentral()
@@ -63,6 +63,11 @@ tasks {
         untilBuild.set("253.*")
 
         changeNotes.set("""
+            <h3>1.1.0</h3>
+            <ul>
+                <li>Added "Pin Selected Service" toggle to prevent selection changes when navigating</li>
+                <li>Added visual indicator for service currently active in editor</li>
+            </ul>
             <h3>1.0.0</h3>
             <ul>
                 <li>Initial release</li>
