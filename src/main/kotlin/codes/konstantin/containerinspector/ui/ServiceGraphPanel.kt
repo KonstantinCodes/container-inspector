@@ -8,6 +8,7 @@ import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.DialogWrapper
 import com.intellij.ui.JBColor
+import com.intellij.ui.components.JBCheckBox
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.components.JBTextField
@@ -18,6 +19,7 @@ import codes.konstantin.containerinspector.layout.ElkLayoutAdapter
 import codes.konstantin.containerinspector.model.ServiceDefinition
 import codes.konstantin.containerinspector.model.ServiceGraph
 import codes.konstantin.containerinspector.model.ServiceGroup
+import codes.konstantin.containerinspector.service.CoverageService
 import codes.konstantin.containerinspector.settings.SymfonyContainerSettings
 import java.awt.*
 import java.awt.event.*
@@ -36,9 +38,10 @@ class ServiceGraphPanel(
     private val onSelectionChanged: ((ServiceDefinition?, Int, Int) -> Unit)? = null,
     private val onClose: (() -> Unit)? = null,
     private val onNavigateToEditor: (() -> Unit)? = null
-) : JPanel(BorderLayout()) {
+) : JPanel(BorderLayout()), com.intellij.openapi.Disposable {
 
     private val settings = codes.konstantin.containerinspector.settings.SymfonyContainerSettings.getInstance(project)
+    private val coverageService = CoverageService.getInstance(project)
     private val graphCanvas = GraphCanvas()
     private val scrollPane = JBScrollPane(graphCanvas).apply {
         // Hide tooltip when scrolling
@@ -79,7 +82,7 @@ class ServiceGraphPanel(
     // Graph display options
     private var showVendor = settings.showVendor
     private val showVendorAction = object : ToggleAction(
-        "Toggle Vendor Services",
+        "Vendor Services",
         "Show or hide vendor/library services",
         AllIcons.Actions.GroupByPackage
     ) {
@@ -100,7 +103,7 @@ class ServiceGraphPanel(
 
     private var showSingles = settings.showSingles
     private val showSinglesAction = object : ToggleAction(
-        "Toggle Single Nodes",
+        "Single Nodes",
         "Show or hide nodes without connections",
         AllIcons.General.ShowInfos
     ) {
@@ -121,7 +124,7 @@ class ServiceGraphPanel(
 
     private var fullTrace = settings.fullTrace
     private val fullTraceAction = object : ToggleAction(
-        "Toggle Full Trace",
+        "Full Trace",
         "Show full connection trace between nodes",
         AllIcons.Hierarchy.Class
     ) {
@@ -142,7 +145,7 @@ class ServiceGraphPanel(
 
     private var focusMode = settings.focusMode
     private val focusModeAction = object : ToggleAction(
-        "Toggle Focus Mode",
+        "Focus Mode",
         "Focus on selected service and its immediate connections",
         AllIcons.General.InspectionsEye
     ) {
@@ -214,6 +217,34 @@ class ServiceGraphPanel(
         ActionToolbar.DEFAULT_MINIMUM_BUTTON_SIZE
     )
 
+    // Coverage options
+    private var showCoverage = settings.showCoverage
+    private var showCoveragePercentage = settings.showCoveragePercentage
+    private var showLineLevelCoverage = settings.showLineLevelCoverage
+    private var highlightLowCoverage = settings.highlightLowCoverage
+
+    private val coverageOptionsAction = object : AnAction(
+        "Coverage Options",
+        "Configure coverage display options",
+        AllIcons.Toolwindows.ToolWindowCoverage
+    ) {
+        override fun actionPerformed(e: AnActionEvent) {
+            val button = e.inputEvent?.component as? java.awt.Component ?: return
+            val popup = com.intellij.openapi.ui.popup.JBPopupFactory.getInstance()
+                .createComponentPopupBuilder(createCoverageOptionsPanel(), null)
+                .setRequestFocus(true)
+                .createPopup()
+            popup.showUnderneathOf(button)
+        }
+    }
+
+    private val coverageOptionsButton = ActionButton(
+        coverageOptionsAction,
+        coverageOptionsAction.templatePresentation.clone(),
+        ActionPlaces.TOOLBAR,
+        ActionToolbar.DEFAULT_MINIMUM_BUTTON_SIZE
+    )
+
     private var searchResults = listOf<Node>()
     private var currentResultIndex = -1
 
@@ -237,11 +268,20 @@ class ServiceGraphPanel(
                 // Vertical separator
                 leftPanel.add(createVerticalSeparator())
 
+                leftPanel.add(coverageOptionsButton)
+                leftPanel.add(linkWithEditorButton)
+
+                // Vertical separator
+                leftPanel.add(createVerticalSeparator())
+
                 leftPanel.add(showVendorButton)
                 leftPanel.add(showSinglesButton)
+
+                // Vertical separator
+                leftPanel.add(createVerticalSeparator())
+
                 leftPanel.add(fullTraceButton)
                 leftPanel.add(focusModeButton)
-                leftPanel.add(linkWithEditorButton)
                 leftPanel.add(pinSelectedServiceButton)
 
                 // Vertical separator
@@ -331,7 +371,85 @@ class ServiceGraphPanel(
         }
     }
 
+    private fun createCoverageOptionsPanel(): JComponent {
+        return JPanel().apply {
+            layout = BoxLayout(this, BoxLayout.Y_AXIS)
+            border = JBUI.Borders.empty(8)
+
+            val displayCoverageCheckbox = JBCheckBox("Display Coverage", showCoverage).apply {
+                addActionListener {
+                    showCoverage = isSelected
+                    settings.showCoverage = isSelected
+                    graphCanvas.currentGraph?.let { graphCanvas.setGraph(it) }
+                }
+            }
+
+            val showPercentageCheckbox = JBCheckBox("Display Percentage", showCoveragePercentage).apply {
+                addActionListener {
+                    showCoveragePercentage = isSelected
+                    settings.showCoveragePercentage = isSelected
+                    graphCanvas.repaint()
+                }
+            }
+
+            val showLineLevelCheckbox = JBCheckBox("Line-Level Coverage", showLineLevelCoverage).apply {
+                addActionListener {
+                    showLineLevelCoverage = isSelected
+                    settings.showLineLevelCoverage = isSelected
+                    graphCanvas.repaint()
+                }
+            }
+
+            val highlightLowCoverageCheckbox = JBCheckBox("Highlight Low Coverage", highlightLowCoverage).apply {
+                addActionListener {
+                    highlightLowCoverage = isSelected
+                    settings.highlightLowCoverage = isSelected
+                    graphCanvas.repaint()
+                }
+            }
+
+            add(displayCoverageCheckbox)
+            add(Box.createVerticalStrut(4))
+            add(showPercentageCheckbox)
+            add(Box.createVerticalStrut(4))
+            add(showLineLevelCheckbox)
+            add(Box.createVerticalStrut(4))
+            add(highlightLowCoverageCheckbox)
+
+            preferredSize = Dimension(200, 125)
+        }
+    }
+
+    private fun setupCoverageListener() {
+        try {
+            val manager = com.intellij.coverage.CoverageDataManager.getInstance(project)
+
+            manager.addSuiteListener(object : com.intellij.coverage.CoverageSuiteListener {
+                override fun coverageGathered(suite: com.intellij.coverage.CoverageSuite) {}
+
+                override fun beforeSuiteChosen() {}
+
+                override fun afterSuiteChosen() {}
+
+                override fun coverageDataCalculated(suitesBundle: com.intellij.coverage.CoverageSuitesBundle) {
+                    javax.swing.SwingUtilities.invokeLater {
+                        graphCanvas.currentGraph?.let { graph ->
+                            graphCanvas.setGraph(graph)
+                        }
+                    }
+                }
+            }, this)
+
+        } catch (e: Exception) {
+            System.err.println("=== [ServiceGraphPanel] Failed to setup coverage listener: ${e.message}")
+            e.printStackTrace(System.err)
+        }
+    }
+
     private fun setupListeners() {
+        // Listen for coverage suite changes
+        setupCoverageListener()
+
         // When user types, clear results so next Enter performs a new search
         searchField.document.addDocumentListener(object : javax.swing.event.DocumentListener {
             override fun insertUpdate(e: javax.swing.event.DocumentEvent?) {
@@ -612,6 +730,17 @@ class ServiceGraphPanel(
         private var currentTooltipNode: Node? = null
         private var tooltipContent: String? = null
         private var isLoading = false
+        private var pendingSelection: String? = null  //ClassName to select after graph loads
+        var flameAnimationOffset = 0.0
+            private set
+        private val flameAnimationTimer = javax.swing.Timer(50) { // 50ms = 20 FPS
+            flameAnimationOffset = (flameAnimationOffset + 0.1) % (Math.PI * 2)
+            repaint()
+        }
+
+        init {
+            flameAnimationTimer.start()
+        }
 
         fun getZoomFactor(): Double = zoomFactor
 
@@ -1029,13 +1158,23 @@ class ServiceGraphPanel(
 
                     // Create nodes - initially without positions
                     var tempNodes = filteredServices.map { service ->
+                        // Get coverage data if available and showCoverage is enabled
+                        val coverageData = if (showCoverage && service.className != null && coverageService.isCoverageAvailable()) {
+                            coverageService.getCoverageData(service.className)
+                        } else {
+                            null
+                        }
+
                         Node(
                             service = service,
                             x = 0.0,
                             y = 0.0,
                             isVendorFn = { !isAppService(it) },
                             minifiedDeps = graph.getDirectDependencies(service.id)
-                                .filter { minifyChecker?.shouldMinify(it) == true }
+                                .filter { minifyChecker?.shouldMinify(it) == true },
+                            coveragePercentage = coverageData?.percentage,
+                            lineCoverage = coverageData?.lineCoverage,
+                            graphCanvas = graphCanvas
                         )
                     }
 
@@ -1159,6 +1298,16 @@ class ServiceGraphPanel(
                             selectedNode = nodes.find { it.service.id == selectedServiceId }
                             nodes.forEach { node ->
                                 node.isSelected = node == selectedNode
+                            }
+                        }
+
+                        // Handle pending selection
+                        if (pendingSelection != null) {
+                            val className = pendingSelection
+                            pendingSelection = null
+                            // Use invokeLater to ensure layout is fully complete
+                            SwingUtilities.invokeLater {
+                                selectNodeByClassName(className!!)
                             }
                         }
 
@@ -1398,6 +1547,12 @@ class ServiceGraphPanel(
         }
 
         fun selectNodeByClassName(className: String, selectNode: Boolean = true) {
+            // If nodes haven't loaded yet, store as pending selection
+            if (nodes.isEmpty()) {
+                pendingSelection = className
+                return
+            }
+
             val matchingNode = nodes.firstOrNull { node ->
                 node.service.className == className
             }
@@ -1414,6 +1569,13 @@ class ServiceGraphPanel(
                         val dependencies = graph.getDirectDependencies(matchingNode.service.id).size
                         val dependents = graph.getDirectDependents(matchingNode.service.id).size
                         onSelectionChanged?.invoke(matchingNode.service, dependents, dependencies)
+                    }
+
+                    // Rebuild graph only if focus mode is on (to apply focus filtering)
+                    // If focus mode is off, we just need to repaint with the selection
+                    if (focusMode) {
+                        currentGraph?.let { setGraph(it) }
+                        return
                     }
                 }
 
@@ -1447,6 +1609,13 @@ class ServiceGraphPanel(
                         val config = settings.getActiveConfig()
                         val minifyChecker = config?.let { MinifyChecker(it) }
 
+                        // Get coverage data if available
+                        val coverage = if (service.className != null && coverageService.isCoverageAvailable()) {
+                            coverageService.getCoveragePercentage(service.className)
+                        } else {
+                            null
+                        }
+
                         // Create a temporary node to select it and trigger graph rebuild
                         selectedNode = Node(
                             service = service,
@@ -1454,7 +1623,9 @@ class ServiceGraphPanel(
                             y = 0.0,
                             isVendorFn = { !isAppService(it) },
                             minifiedDeps = graph.getDirectDependencies(service.id)
-                                .filter { minifyChecker?.shouldMinify(it) == true }
+                                .filter { minifyChecker?.shouldMinify(it) == true },
+                            coveragePercentage = coverage,
+                            graphCanvas = graphCanvas
                         )
                         // Rebuild the graph with the new selection - this will create focused view around new service
                         setGraph(graph)
@@ -1678,7 +1849,7 @@ class ServiceGraphPanel(
 
             // Draw nodes (on top of everything)
             nodes.forEach { node ->
-                node.draw(g2, pinSelectedService)
+                node.draw(g2, pinSelectedService, showCoveragePercentage, showLineLevelCoverage, highlightLowCoverage)
             }
 
             // Draw tooltip as part of the canvas (on top of everything else)
@@ -1767,12 +1938,16 @@ class ServiceGraphPanel(
         var isCurrentSearchResult: Boolean = false,
         var isSelected: Boolean = false,
         var isActiveInEditor: Boolean = false,
-        var isTagIconHovered: Boolean = false
+        var isTagIconHovered: Boolean = false,
+        var coveragePercentage: Double? = null,
+        var lineCoverage: List<Boolean>? = null,
+        val graphCanvas: GraphCanvas
     ) {
         companion object {
             const val MIN_WIDTH = 150
             const val MIN_HEIGHT = 70
             const val PADDING = 10
+            const val COVERAGE_BAR_HEIGHT = 8
         }
 
         var width: Double = MIN_WIDTH.toDouble()
@@ -1790,7 +1965,12 @@ class ServiceGraphPanel(
             val serviceIdDiffers = service.className != null && service.className != service.id
 
             val maxTextWidth: Int
-            var totalHeight = PADDING * 2
+            var totalHeight = if (coveragePercentage != null) {
+                // With coverage bar: top margin + bar + no gap (content starts immediately after)
+                2 + COVERAGE_BAR_HEIGHT + PADDING // Bottom padding only
+            } else {
+                PADDING * 2 // Normal top and bottom padding
+            }
 
             if (serviceIdDiffers) {
                 // Layout: FQCN (small) + @serviceId (large)
@@ -1865,6 +2045,91 @@ class ServiceGraphPanel(
             }
         }
 
+        private fun drawFlames(g2: Graphics2D, coverage: Double) {
+            if (coverage == 0.0) {
+                // 0% coverage: flames along entire width
+                val flameWidth = 12.0
+                val flameSpacing = flameWidth + 4.0
+                val flameCount = ((width - 8.0) / flameSpacing).toInt().coerceAtLeast(1)
+                val totalFlamesWidth = flameCount * flameSpacing - 4.0
+                val startX = x + (width - totalFlamesWidth) / 2
+                val baseY = y - 5
+
+                for (i in 0 until flameCount) {
+                    val flameX = startX + i * flameSpacing
+                    drawSingleFlame(g2, flameX, baseY, flameWidth, i)
+                }
+            } else {
+                // < 25% coverage: 3 flames
+                val flameCount = 3
+                val flameWidth = 12.0
+                val flameSpacing = flameWidth + 8.0
+                val totalFlamesWidth = flameCount * flameSpacing - 8.0
+                val startX = x + (width - totalFlamesWidth) / 2
+                val baseY = y - 5
+
+                for (i in 0 until flameCount) {
+                    val flameX = startX + i * flameSpacing
+                    drawSingleFlame(g2, flameX, baseY, flameWidth, i)
+                }
+            }
+        }
+
+        private fun drawSingleFlame(g2: Graphics2D, baseX: Double, baseY: Double, width: Double, index: Int) {
+            val animationOffset = graphCanvas.flameAnimationOffset
+            val height = 18.0 + Math.sin(animationOffset + index * 0.5) * 3.0
+
+            // Main flame body (orange/yellow gradient)
+            val path = java.awt.geom.Path2D.Double()
+
+            // Start at bottom center
+            path.moveTo(baseX + width / 2, baseY)
+
+            // Left side with wavy animation
+            val leftWave = Math.sin(animationOffset * 2 + index) * 2.0
+            path.curveTo(
+                baseX + leftWave, baseY - height * 0.3,
+                baseX + width * 0.2 + leftWave, baseY - height * 0.7,
+                baseX + width * 0.5, baseY - height
+            )
+
+            // Right side with wavy animation
+            val rightWave = Math.sin(animationOffset * 2 + index + 1) * 2.0
+            path.curveTo(
+                baseX + width * 0.8 + rightWave, baseY - height * 0.7,
+                baseX + width + rightWave, baseY - height * 0.3,
+                baseX + width / 2, baseY
+            )
+
+            path.closePath()
+
+            // Draw outer flame (orange/red)
+            g2.color = Color(255, 140, 0, 200) // Orange
+            g2.fill(path)
+
+            // Draw inner flame (yellow)
+            val innerPath = java.awt.geom.Path2D.Double()
+            val innerScale = 0.6
+            val innerHeight = height * innerScale
+            val innerBaseY = baseY - height * 0.1
+
+            innerPath.moveTo(baseX + width / 2, innerBaseY)
+            innerPath.curveTo(
+                baseX + width * 0.3, innerBaseY - innerHeight * 0.4,
+                baseX + width * 0.35, innerBaseY - innerHeight * 0.8,
+                baseX + width * 0.5, innerBaseY - innerHeight
+            )
+            innerPath.curveTo(
+                baseX + width * 0.65, innerBaseY - innerHeight * 0.8,
+                baseX + width * 0.7, innerBaseY - innerHeight * 0.4,
+                baseX + width / 2, innerBaseY
+            )
+            innerPath.closePath()
+
+            g2.color = Color(255, 220, 0, 220) // Bright yellow
+            g2.fill(innerPath)
+        }
+
         fun contains(point: Point): Boolean {
             return point.x >= x && point.x <= x + width &&
                     point.y >= y && point.y <= y + height
@@ -1873,7 +2138,20 @@ class ServiceGraphPanel(
         fun getAliasIconBounds(): Rectangle2D.Double? {
             if (service.aliases.isEmpty()) return null
             val iconSize = 16.0
-            val tagIconOffset = if (service.tags.isNotEmpty()) iconSize + 4 else 0.0
+            val publicIconOffset = if (service.isPublic) 20.0 + 4 else 0.0 // Public icon is 20px
+            val tagIconOffset = if (service.tags.isNotEmpty()) 16.0 + 4 else 0.0
+            // Position icon to the left of the public icon (or tag icon if no public, or at top right if neither)
+            val centerX = x + width - publicIconOffset - tagIconOffset
+            val centerY = y
+            val iconX = centerX - iconSize / 2
+            val iconY = centerY - iconSize / 2
+            return Rectangle2D.Double(iconX, iconY, iconSize, iconSize)
+        }
+
+        fun getPublicIconBounds(): Rectangle2D.Double? {
+            if (!service.isPublic) return null
+            val iconSize = 20.0 // Bigger icon size for public
+            val tagIconOffset = if (service.tags.isNotEmpty()) 16.0 + 4 else 0.0
             // Position icon to the left of the tag icon (or at top right if no tags)
             val centerX = x + width - tagIconOffset
             val centerY = y
@@ -1899,9 +2177,10 @@ class ServiceGraphPanel(
                     point.y >= bounds.y && point.y <= bounds.y + bounds.height
         }
 
-        fun draw(g2: Graphics2D, pinSelectedService: Boolean) {
+        fun draw(g2: Graphics2D, pinSelectedService: Boolean, showCoveragePercentage: Boolean, showLineLevelCoverage: Boolean, highlightLowCoverage: Boolean) {
             // Background with solid color
             val isVendor = isVendorFn(service)
+
             g2.color = when {
                 isSelected -> JBColor(Color(255, 255, 200), Color(120, 120, 60))  // Yellow for selection
                 isCurrentSearchResult -> JBColor(Color(220, 255, 220), Color(80, 120, 80))  // Light green for current search result
@@ -1911,8 +2190,8 @@ class ServiceGraphPanel(
                 else -> JBColor.WHITE
             }
 
-            // Draw shape (rounded for isActiveInEditor, rectangular otherwise)
-            if (isActiveInEditor) {
+            // Draw shape (rounded for isActiveInEditor or isSelected, rectangular otherwise)
+            if (isActiveInEditor || isSelected) {
                 val cornerRadius = 8.0
                 val roundRect = java.awt.geom.RoundRectangle2D.Double(x, y, width, height, cornerRadius, cornerRadius)
                 g2.fill(roundRect)
@@ -1920,7 +2199,83 @@ class ServiceGraphPanel(
                 g2.fill(Rectangle2D.Double(x, y, width, height))
             }
 
-            // Border
+            // Draw coverage indicator inside the box at the top if available (BEFORE border so border is on top)
+            if (coveragePercentage != null) {
+                val coverage = coveragePercentage!!
+                val coverageY = y + 2 // 2px from top border
+                val coverageBarWidth = width - 4 // 2px margin on each side
+
+                if (showLineLevelCoverage && lineCoverage != null && lineCoverage!!.isNotEmpty()) {
+                    // Line-level coverage visualization - group consecutive lines with same coverage status
+                    val lineWidth = coverageBarWidth / lineCoverage!!.size
+                    var currentX = x + 2
+                    var i = 0
+
+                    while (i < lineCoverage!!.size) {
+                        val isCovered = lineCoverage!![i]
+                        var consecutiveCount = 1
+
+                        // Count consecutive lines with same coverage status
+                        while (i + consecutiveCount < lineCoverage!!.size && lineCoverage!![i + consecutiveCount] == isCovered) {
+                            consecutiveCount++
+                        }
+
+                        // Draw grouped block
+                        g2.color = if (isCovered) {
+                            JBColor(Color(0xCC, 0xFF, 0xCC), Color(0x37, 0x51, 0x39))
+                        } else {
+                            JBColor(Color(0xFF, 0xCC, 0xCC), Color(0x5e, 0x38, 0x38))
+                        }
+                        val blockWidth = lineWidth * consecutiveCount
+                        g2.fill(Rectangle2D.Double(currentX, coverageY, blockWidth, COVERAGE_BAR_HEIGHT.toDouble()))
+
+                        currentX += blockWidth
+                        i += consecutiveCount
+                    }
+
+                    // Draw coverage percentage text if enabled
+                    if (showCoveragePercentage) {
+                        val coverageText = String.format("%.0f%%", coverage)
+                        g2.font = Font("Dialog", Font.PLAIN, 8)
+                        g2.color = JBColor(Color.BLACK, Color.WHITE)
+                        val fm = g2.fontMetrics
+                        val textWidth = fm.stringWidth(coverageText)
+                        val textX = x + 2 + (coverageBarWidth - textWidth) / 2
+                        val textY = coverageY + (COVERAGE_BAR_HEIGHT - fm.height) / 2 + fm.ascent
+                        g2.drawString(coverageText, textX.toFloat(), textY.toFloat())
+                    }
+                } else {
+                    // Standard progress bar visualization
+                    // Background (gray)
+                    g2.color = JBColor(Color(220, 220, 220), Color(80, 80, 80))
+                    g2.fill(Rectangle2D.Double(x + 2, coverageY, coverageBarWidth, COVERAGE_BAR_HEIGHT.toDouble()))
+
+                    // Coverage bar (colored based on percentage)
+                    val coveredWidth = coverageBarWidth * (coverage / 100.0)
+                    g2.color = JBColor(Color(0xCC, 0xFF, 0xCC), Color(0x37, 0x51, 0x39))
+                    g2.fill(Rectangle2D.Double(x + 2, coverageY, coveredWidth, COVERAGE_BAR_HEIGHT.toDouble()))
+
+                    // Draw coverage percentage text if enabled
+                    if (showCoveragePercentage) {
+                        val coverageText = String.format("%.0f%%", coverage)
+                        g2.font = Font("Dialog", Font.PLAIN, 8)
+                        g2.color = JBColor(Color.BLACK, Color.WHITE)
+                        val fm = g2.fontMetrics
+                        val textWidth = fm.stringWidth(coverageText)
+                        val textX = x + 2 + (coverageBarWidth - textWidth) / 2
+                        val textY = coverageY + (COVERAGE_BAR_HEIGHT - fm.height) / 2 + fm.ascent
+                        g2.drawString(coverageText, textX.toFloat(), textY.toFloat())
+                    }
+                }
+            }
+
+            // Draw flames if coverage is less than 25% and highlightLowCoverage is enabled
+            val coverage = coveragePercentage
+            if (highlightLowCoverage && coverage != null && coverage < 25.0) {
+                drawFlames(g2, coverage)
+            }
+
+            // Border (drawn AFTER coverage bar so it appears on top)
             g2.color = when {
                 isSelected -> JBColor(Color(200, 150, 0), Color(200, 200, 100))  // Dark yellow/gold for selected
                 isCurrentSearchResult -> JBColor(Color(0, 180, 0), Color(100, 220, 100))  // Green for current search result
@@ -1939,8 +2294,8 @@ class ServiceGraphPanel(
                 }
             )
 
-            // Draw border (rounded for isActiveInEditor, rectangular otherwise)
-            if (isActiveInEditor) {
+            // Draw border (rounded for isActiveInEditor or isSelected, rectangular otherwise)
+            if (isActiveInEditor || isSelected) {
                 val cornerRadius = 8.0
                 val roundRect = java.awt.geom.RoundRectangle2D.Double(x, y, width, height, cornerRadius, cornerRadius)
                 g2.draw(roundRect)
@@ -1948,7 +2303,12 @@ class ServiceGraphPanel(
                 g2.draw(Rectangle2D.Double(x, y, width, height))
             }
 
-            var currentY = y + PADDING
+            // Start position for content: if coverage bar exists, start right after it with no gap
+            var currentY = if (coveragePercentage != null) {
+                y + 2 + COVERAGE_BAR_HEIGHT // Start right after coverage bar (2px top margin + bar height)
+            } else {
+                y + PADDING // Normal padding from top
+            }
 
             // Check if service ID differs from class name
             val serviceIdDiffers = service.className != null && service.className != service.id
@@ -2081,7 +2441,6 @@ class ServiceGraphPanel(
             val flagFm = g2.fontMetrics
             val flags = mutableListOf<String>()
 
-            if (service.isPublic) flags.add("PUBLIC")
             if (service.isLazy) flags.add("LAZY")
             if (!service.isAutowired) flags.add("!autowired")
             if (!service.isAutoconfigured) flags.add("!autoconfigured")
@@ -2131,6 +2490,17 @@ class ServiceGraphPanel(
                 val iconY = (y - iconSize / 2).toInt()
 
                 AllIcons.General.PinHovered.paintIcon(null, g2, iconX, iconY)
+            }
+
+            // Draw public icon if service is public (scaled to 20x20)
+            if (service.isPublic) {
+                val iconBounds = getPublicIconBounds()!!
+                val iconX = iconBounds.x.toInt()
+                val iconY = iconBounds.y.toInt()
+
+                // Scale the icon to 20x20
+                val scaledIcon = com.intellij.util.IconUtil.scale(AllIcons.Nodes.Public, null, 20f / 16f)
+                scaledIcon.paintIcon(null, g2, iconX, iconY)
             }
 
             // Draw tag icon in top right corner if service has tags
@@ -2228,5 +2598,9 @@ class ServiceGraphPanel(
             g2.stroke = BasicStroke(1.0f)
             g2.drawString(group.name, (x + 10).toFloat(), (y + 15).toFloat())
         }
+    }
+
+    override fun dispose() {
+        // Cleanup handled by Disposer framework
     }
 }

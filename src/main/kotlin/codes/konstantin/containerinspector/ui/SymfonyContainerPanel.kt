@@ -36,7 +36,7 @@ class SymfonyContainerPanel(private val project: Project) : JPanel(BorderLayout(
     private val serviceListModel = DefaultListModel<ServiceDefinition>()
     private val serviceList = JBList(serviceListModel)
     private val detailsPanel = ServiceDetailsPanel(project)
-    private val graphPanel = ServiceGraphPanel(
+    internal val graphPanel = ServiceGraphPanel(
         project,
         onSelectionChanged = { service, dependents, dependencies ->
             if (service != null) {

@@ -37,6 +37,12 @@ class SymfonyContainerSettings() : PersistentStateComponent<SymfonyContainerSett
     var focusMode: Boolean = false
     var linkWithEditor: Boolean = false
 
+    // Coverage display options
+    var showCoverage: Boolean = true
+    var showCoveragePercentage: Boolean = true
+    var showLineLevelCoverage: Boolean = true
+    var highlightLowCoverage: Boolean = false
+
     // Config system
     var configs: String = "[]" // JSON array of Config objects
     var activeConfigName: String = ""

@@ -9,6 +9,7 @@
         <h3>Inspect your Symfony DI Container</h3>
         <ul>
             <li><strong>Interactive Graph Visualization</strong> - See your entire service architecture at a glance with an automatic hierarchical layout</li>
+            <li><strong>Code Coverage Integration</strong> - View test coverage directly on service nodes in the graph</li>
             <li><strong>Smart Search & Navigation</strong> - Find services by ID or class name with instant highlighting and one-click navigation to PHP source code</li>
             <li><strong>Dependency Analysis</strong> - Explore service dependencies and usages interactively by expanding nodes to reveal connections</li>
             <li><strong>Multiple Configuration Profiles</strong> - Manage different container configurations</li>

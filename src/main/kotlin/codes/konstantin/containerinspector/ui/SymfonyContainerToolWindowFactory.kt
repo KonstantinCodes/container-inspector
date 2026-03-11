@@ -13,6 +13,7 @@ class SymfonyContainerToolWindowFactory : ToolWindowFactory {
     override fun createToolWindowContent(project: Project, toolWindow: ToolWindow) {
         val containerPanel = SymfonyContainerPanel(project)
         val content = ContentFactory.getInstance().createContent(containerPanel, "", false)
+        content.setDisposer(containerPanel.graphPanel)
         toolWindow.contentManager.addContent(content)
     }
 }

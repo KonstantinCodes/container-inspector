@@ -4,7 +4,7 @@ plugins {
 }
 
 group = "codes.konstantin"
-version = "1.1.0"
+version = "1.2.0"
 
 repositories {
     mavenCentral()
@@ -60,9 +60,12 @@ tasks {
 
     patchPluginXml {
         sinceBuild.set("253")
-        untilBuild.set("253.*")
 
         changeNotes.set("""
+            <h3>1.2.0</h3>
+            <ul>
+                <li><strong>Code Coverage Support</strong> - Service nodes now display test coverage percentages when coverage data is available.</li>
+            </ul>
             <h3>1.1.0</h3>
             <ul>
                 <li>Added "Pin Selected Service" toggle to prevent selection changes when navigating</li>
