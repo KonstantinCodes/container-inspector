@@ -123,22 +123,27 @@ class ServiceGraphPanel(
     )
 
     private var fullTrace = settings.fullTrace
-    private val fullTraceAction = object : ToggleAction(
-        "Full Trace",
-        "Show full connection trace between nodes",
+    private var traceOnHover = settings.traceOnHover
+    private var traceOnActive = settings.traceOnActive
+
+    private val traceOptionsAction = object : AnAction(
+        "Trace Options",
+        "Configure trace display options",
         AllIcons.Hierarchy.Class
     ) {
-        override fun isSelected(e: AnActionEvent): Boolean = fullTrace
-
-        override fun setSelected(e: AnActionEvent, state: Boolean) {
-            fullTrace = state
-            settings.fullTrace = state
-            graphCanvas.repaint()
+        override fun actionPerformed(e: AnActionEvent) {
+            val button = e.inputEvent?.component as? java.awt.Component ?: return
+            val popup = com.intellij.openapi.ui.popup.JBPopupFactory.getInstance()
+                .createComponentPopupBuilder(createTraceOptionsPanel(), null)
+                .setRequestFocus(true)
+                .createPopup()
+            popup.showUnderneathOf(button)
         }
     }
-    private val fullTraceButton = ActionButton(
-        fullTraceAction,
-        fullTraceAction.templatePresentation.clone(),
+
+    private val traceOptionsButton = ActionButton(
+        traceOptionsAction,
+        traceOptionsAction.templatePresentation.clone(),
         ActionPlaces.TOOLBAR,
         ActionToolbar.DEFAULT_MINIMUM_BUTTON_SIZE
     )
@@ -280,7 +285,7 @@ class ServiceGraphPanel(
                 // Vertical separator
                 leftPanel.add(createVerticalSeparator())
 
-                leftPanel.add(fullTraceButton)
+                leftPanel.add(traceOptionsButton)
                 leftPanel.add(focusModeButton)
                 leftPanel.add(pinSelectedServiceButton)
 
@@ -417,6 +422,45 @@ class ServiceGraphPanel(
             add(highlightLowCoverageCheckbox)
 
             preferredSize = Dimension(200, 125)
+        }
+    }
+
+    private fun createTraceOptionsPanel(): JComponent {
+        return JPanel().apply {
+            layout = BoxLayout(this, BoxLayout.Y_AXIS)
+            border = JBUI.Borders.empty(8)
+
+            val fullTraceCheckbox = JBCheckBox("Full Trace", fullTrace).apply {
+                addActionListener {
+                    fullTrace = isSelected
+                    settings.fullTrace = isSelected
+                    graphCanvas.repaint()
+                }
+            }
+
+            val traceOnHoverCheckbox = JBCheckBox("Trace on Hover", traceOnHover).apply {
+                addActionListener {
+                    traceOnHover = isSelected
+                    settings.traceOnHover = isSelected
+                    graphCanvas.repaint()
+                }
+            }
+
+            val traceOnActiveCheckbox = JBCheckBox("Trace on Active", traceOnActive).apply {
+                addActionListener {
+                    traceOnActive = isSelected
+                    settings.traceOnActive = isSelected
+                    graphCanvas.repaint()
+                }
+            }
+
+            add(fullTraceCheckbox)
+            add(Box.createVerticalStrut(4))
+            add(traceOnHoverCheckbox)
+            add(Box.createVerticalStrut(4))
+            add(traceOnActiveCheckbox)
+
+            preferredSize = Dimension(180, 100)
         }
     }
 
@@ -729,6 +773,7 @@ class ServiceGraphPanel(
         private var zoomFactor = 1.0
         private var currentTooltipNode: Node? = null
         private var tooltipContent: String? = null
+        private var hoveredNode: Node? = null  // Track node being hovered for trace on hover
         private var isLoading = false
         private var pendingSelection: String? = null  //ClassName to select after graph loads
         var flameAnimationOffset = 0.0
@@ -970,6 +1015,11 @@ class ServiceGraphPanel(
                         tooltipContent = null
                         repaint()
                     }
+                    // Clear hover trace when mouse leaves
+                    if (traceOnHover && hoveredNode != null) {
+                        hoveredNode = null
+                        repaint()
+                    }
                 }
             })
 
@@ -994,7 +1044,7 @@ class ServiceGraphPanel(
                     }
 
                     // Now check for hovered node
-                    val hoveredNode = nodes.find { it.contains(scaledPoint) }
+                    val currentlyHoveredNode = nodes.find { it.contains(scaledPoint) }
 
                     // Update hover states
                     nodes.forEach { node ->
@@ -1002,11 +1052,19 @@ class ServiceGraphPanel(
                         node.isTagIconHovered = false
                     }
 
+                    // Update trace hover node (for trace on hover feature)
+                    if (traceOnHover) {
+                        if (this@GraphCanvas.hoveredNode != currentlyHoveredNode) {
+                            this@GraphCanvas.hoveredNode = currentlyHoveredNode
+                            // Repaint needed below
+                        }
+                    }
+
                     // Determine which node should show tags/aliases
                     val nodeWithInfo = if (isOverTagIcon) {
                         tagIconNode
                     } else {
-                        hoveredNode?.takeIf { it.service.tags.isNotEmpty() || it.service.aliases.isNotEmpty() }
+                        currentlyHoveredNode?.takeIf { it.service.tags.isNotEmpty() || it.service.aliases.isNotEmpty() }
                     }
 
                     if (nodeWithInfo != null) {
@@ -1054,9 +1112,9 @@ class ServiceGraphPanel(
                         }
                     }
 
-                    hoveredNode?.isHovered = true
+                    currentlyHoveredNode?.isHovered = true
 
-                    cursor = if (hoveredNode != null || isOverTagIcon) {
+                    cursor = if (currentlyHoveredNode != null || isOverTagIcon) {
                         Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
                     } else {
                         Cursor.getDefaultCursor()
@@ -1735,14 +1793,25 @@ class ServiceGraphPanel(
             val normalEdges = mutableListOf<Edge>()
             val highlightedEdges = mutableListOf<Edge>()
 
-            // Calculate upstream and downstream nodes if a node is selected
+            // Calculate upstream and downstream nodes if a node is selected or hovered
             val upstreamNodes = mutableSetOf<Node>()
             val downstreamNodes = mutableSetOf<Node>()
 
-            if (selectedNode != null && currentGraph != null) {
+            // Determine which node to show trace for, in priority order:
+            // 1. hoveredNode if trace on hover is active
+            // 2. activeNode if trace on active is active
+            // 3. selectedNode (default)
+            val activeNode = if (traceOnActive) nodes.find { it.isActiveInEditor } else null
+            val traceNode = when {
+                traceOnHover && hoveredNode != null -> hoveredNode
+                traceOnActive && activeNode != null -> activeNode
+                else -> selectedNode
+            }
+
+            if (traceNode != null && currentGraph != null) {
                 // Get all upstream dependencies (recursive)
                 val allUpstreamIds = mutableSetOf<String>()
-                val toProcess = mutableListOf(selectedNode!!.service.id)
+                val toProcess = mutableListOf(traceNode!!.service.id)
                 while (toProcess.isNotEmpty()) {
                     val serviceId = toProcess.removeAt(0)
                     currentGraph!!.getDirectDependencies(serviceId).forEach { dep ->
@@ -1756,7 +1825,7 @@ class ServiceGraphPanel(
 
                 // Get all downstream dependents (recursive)
                 val allDownstreamIds = mutableSetOf<String>()
-                val toProcessDown = mutableListOf(selectedNode!!.service.id)
+                val toProcessDown = mutableListOf(traceNode!!.service.id)
                 while (toProcessDown.isNotEmpty()) {
                     val serviceId = toProcessDown.removeAt(0)
                     currentGraph!!.getDirectDependents(serviceId).forEach { dep ->
@@ -1770,19 +1839,19 @@ class ServiceGraphPanel(
             }
 
             edges.forEach { edge ->
-                val isDirectUpstream = selectedNode != null && edge.to == selectedNode
-                val isDirectDownstream = selectedNode != null && edge.from == selectedNode
+                val isDirectUpstream = traceNode != null && edge.to == traceNode
+                val isDirectDownstream = traceNode != null && edge.from == traceNode
 
                 // For full trace: check if both nodes of edge are in the same chain
-                // Edge is in upstream chain if both nodes are dependents (or edge points to selected)
-                val isInUpstreamChain = fullTrace && selectedNode != null &&
+                // Edge is in upstream chain if both nodes are dependents (or edge points to trace node)
+                val isInUpstreamChain = fullTrace && traceNode != null &&
                     ((edge.from in downstreamNodes && edge.to in downstreamNodes) ||
-                     (edge.from in downstreamNodes && edge.to == selectedNode))
+                     (edge.from in downstreamNodes && edge.to == traceNode))
 
-                // Edge is in downstream chain if both nodes are dependencies (or edge points from selected)
-                val isInDownstreamChain = fullTrace && selectedNode != null &&
+                // Edge is in downstream chain if both nodes are dependencies (or edge points from trace node)
+                val isInDownstreamChain = fullTrace && traceNode != null &&
                     ((edge.from in upstreamNodes && edge.to in upstreamNodes) ||
-                     (edge.from == selectedNode && edge.to in upstreamNodes))
+                     (edge.from == traceNode && edge.to in upstreamNodes))
 
                 if (isDirectUpstream || isDirectDownstream || isInUpstreamChain || isInDownstreamChain) {
                     highlightedEdges.add(edge)
@@ -1817,18 +1886,18 @@ class ServiceGraphPanel(
                 val path = edge.getRoutingPath()
 
                 // Determine color based on which chain the edge belongs to
-                // Red: dependency chain (what selected depends on)
-                // Blue: dependent chain (what depends on selected)
-                val isDirectDependency = edge.from == selectedNode
-                val isDirectDependent = edge.to == selectedNode
-                val isInDependencyChain = (edge.from == selectedNode && edge.to in upstreamNodes) ||
+                // Red: dependency chain (what trace node depends on)
+                // Blue: dependent chain (what depends on trace node)
+                val isDirectDependency = edge.from == traceNode
+                val isDirectDependent = edge.to == traceNode
+                val isInDependencyChain = (edge.from == traceNode && edge.to in upstreamNodes) ||
                                           (edge.from in upstreamNodes && edge.to in upstreamNodes)
-                val isInDependentChain = (edge.to == selectedNode && edge.from in downstreamNodes) ||
+                val isInDependentChain = (edge.to == traceNode && edge.from in downstreamNodes) ||
                                          (edge.from in downstreamNodes && edge.to in downstreamNodes)
 
                 g2.color = when {
-                    isInDependencyChain || isDirectDependency -> JBColor(Color(0xdb, 0x3b, 0x4b), Color(0xdb, 0x3b, 0x4b))    // #db3b4b Dependencies (what selected depends on)
-                    isInDependentChain || isDirectDependent -> JBColor(Color(0x00, 0x33, 0xb3), Color(0x00, 0x33, 0xb3))     // #0033b3 Dependents (what depends on selected)
+                    isInDependencyChain || isDirectDependency -> JBColor(Color(0xdb, 0x3b, 0x4b), Color(0xdb, 0x3b, 0x4b))    // #db3b4b Dependencies (what trace node depends on)
+                    isInDependentChain || isDirectDependent -> JBColor(Color(0x00, 0x33, 0xb3), Color(0x00, 0x33, 0xb3))     // #0033b3 Dependents (what depends on trace node)
                     else -> JBColor(Color(0xdb, 0x3b, 0x4b), Color(0xdb, 0x3b, 0x4b))
                 }
                 g2.stroke = BasicStroke(3.0f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND)

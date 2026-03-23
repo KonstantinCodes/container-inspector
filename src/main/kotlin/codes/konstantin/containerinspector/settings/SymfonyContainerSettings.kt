@@ -34,6 +34,8 @@ class SymfonyContainerSettings() : PersistentStateComponent<SymfonyContainerSett
     var showVendor: Boolean = true
     var showSingles: Boolean = false
     var fullTrace: Boolean = true
+    var traceOnHover: Boolean = true
+    var traceOnActive: Boolean = true
     var focusMode: Boolean = false
     var linkWithEditor: Boolean = false
 

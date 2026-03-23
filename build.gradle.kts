@@ -4,7 +4,7 @@ plugins {
 }
 
 group = "codes.konstantin"
-version = "1.2.0"
+version = "1.2.1"
 
 repositories {
     mavenCentral()
@@ -62,6 +62,15 @@ tasks {
         sinceBuild.set("253")
 
         changeNotes.set("""
+            <h3>1.2.1</h3>
+            <ul>
+                <li><strong>Enhanced Trace Options</strong> - Converted full trace icon to menu with three options:</li>
+                <ul>
+                    <li>Full Trace - Shows complete dependency chains</li>
+                    <li>Trace on Hover - Shows trace for services you hover over</li>
+                    <li>Trace on Active - Shows trace for the service currently active in editor</li>
+                </ul>
+            </ul>
             <h3>1.2.0</h3>
             <ul>
                 <li><strong>Code Coverage Support</strong> - Service nodes now display test coverage percentages when coverage data is available.</li>
